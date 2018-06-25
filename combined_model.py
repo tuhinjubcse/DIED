@@ -348,15 +348,13 @@ def lstm_model(sequence_length, embedding_matrix, embedding_dim,X_handcrafted):
 	model_variation = 'LSTM'
 	print('Model variation is %s' % model_variation)
 	model1 = Sequential()
-	model1.add(Embedding(len(vocab)+1, embedding_dim,weights= [embedding_matrix], input_length=sequence_length, trainable=True))
+	model1.add(Embedding(len(vocab)+1, embedding_dim,weights= [embedding_matrix], input_length=sequence_length, trainable=False))
 	#model1.add(Dropout(0.3))#, input_shape=(sequence_length, embedding_dim)))
 	model1.add(Bidirectional(LSTM(150,return_sequences=True)))
-	model1.add(GlobalMaxPooling1D())
-	#model1.add(Bidirectional(LSTM(150,return_sequences=True)))
 	#model1.add(Dropout(0.3))
-	#model1.add(Bidirectional(LSTM(150,return_sequences=True)))
+	model1.add(Bidirectional(LSTM(150,return_sequences=True)))
 	#model1.add(Dropout(0.3))
-	#model1.add(Flatten())
+	model1.add(Flatten())
 	#model1.add(AttLayer())
 	#model1.add(Flatten())
 
@@ -366,7 +364,7 @@ def lstm_model(sequence_length, embedding_matrix, embedding_dim,X_handcrafted):
 	model = Sequential()
 	model.add(Merge([model1,model2], mode='concat'))
 	model.add(MaxoutDense(100, W_constraint=maxnorm(2)))
-	model.add(Dropout(0.5))
+	#model.add(Dropout(0.5))
 	model.add(Dense(6,activity_regularizer=l2(0.0001)))
 	model.add(Activation('softmax'))
 	model.compile(loss='categorical_crossentropy',  optimizer=adam, metrics=['accuracy'])
@@ -412,7 +410,7 @@ def train_LSTM(X_train, y_train, X_test,y_test,X_liwc_train, y_liwc_train,X_liwc
         print classification_report(y_test, y_pred)
 	print(len(y_pred))
         if f1_score(y_test, y_pred, average='macro')>=best_macro:
-		f = open('diff_predictions.txt','w')
+		f = open('diff_no_drop_mistake_predictions.txt','w')
 		m = {0:'joy',1:'anger',2:'surprise',3:'disgust',4:'fear',5:'sad'}
 		c = 0
 		for p in range(len(y_pred)):

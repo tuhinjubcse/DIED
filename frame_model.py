@@ -20,7 +20,7 @@ import keras
 from sklearn.model_selection import KFold
 from keras.layers import Embedding,InputLayer
 from keras.layers import Dense, Input, Flatten
-from keras.layers import Conv1D, MaxoutDense,MaxPooling1D,GaussianNoise, Embedding, Merge, Dropout, LSTM, GRU, Bidirectional, TimeDistributed,Activation
+from keras.layers import Conv1D, MaxoutDense,MaxPooling1D,GaussianNoise, GlobalMaxPooling1D,Embedding, Merge, Dropout, LSTM, GRU, Bidirectional, TimeDistributed,Activation
 from keras.models import Sequential ,Model
 import sys
 from keras import backend as K
@@ -31,7 +31,7 @@ import random
 import pdb
 from string import punctuation
 import math
-from my_tokenizer import glove_tokenize
+from my_tokenizer import glove_tokenize,word_frame_tokenize
 from collections import defaultdict
 from data_handler import get_data
 from keras.regularizers import l2
@@ -40,8 +40,8 @@ from keras import constraints
 import pickle
 from sklearn.model_selection import train_test_split
 #from autocorrect import spell
-from keras.optimizers import Adam,SGD
-import ast
+from keras.optimizers import Adam
+from keras.callbacks import ModelCheckpoint
 
 
 reload(sys)
@@ -50,7 +50,7 @@ sys.setdefaultencoding('utf8')
 word2vec_model = None
 freq = defaultdict(int)
 vocab, reverse_vocab = {}, {}
-frame_vocab , reverse_frame_vocab = {},{}
+frame_vocab ,reverse_frame_vocab = {},{}
 EMBEDDING_DIM = 310
 train_tweets = {}
 test_tweets = {}
@@ -60,7 +60,7 @@ MAX_NB_WORDS = 20000
 VALIDATION_SPLIT = 0.1
 INITIALIZE_WEIGHTS_WITH = 'glove'
 SCALE_LOSS_FUN = False
-liwc_features_num = 300
+liwc_features_num = 39
 
 
 
@@ -121,47 +121,7 @@ class AttLayer(Layer):
     def get_output_shape_for(self, input_shape):
         return (input_shape[0], input_shape[-1])
 
-def batch_gen(X, batch_size):
-    n_batches = X.shape[0]/float(batch_size)
-    n_batches = int(math.ceil(n_batches))
-    end = int(X.shape[0]/float(batch_size)) * batch_size
-    n = 0
-    for i in xrange(0,n_batches):
-        if i < n_batches - 1: 
-            batch = X[i*batch_size:(i+1) * batch_size, :]
-            yield batch
-        
-        else:
-            batch = X[end: , :]
-            n += X[end:, :].shape[0]
-            yield batch
 
-def batch_gen(X1, X2,batch_size): # X1 and X2 have same number of samples. Batch created will be using the same indices.
-    n_batches = X1.shape[0]/float(batch_size)
-    n_batches = int(math.ceil(n_batches))
-    end = int(X1.shape[0]/float(batch_size)) * batch_size
-
-    n = 0
-    for i in xrange(0,n_batches):
-        if i < n_batches - 1: 
-            batch1 = X1[i*batch_size:(i+1) * batch_size, :]
-            batch2 = X2[i*batch_size:(i+1) * batch_size, :]
-            yield batch1, batch2
-        
-        else:
-            batch1 = X1[end: , :]
-            batch2 = X2[end: , :]
-            n += X1[end:, :].shape[0]
-
-            yield batch1, batch2
-
-def get_embedding(word):
-    #return
-    try:
-        return word2vec_model[word]
-    except Exception, e:
-        print 'Encoding not found: %s' %(word)
-        return np.zeros(EMBEDDING_DIM)
 
 def get_embedding_weights():
     f = open('missed_vocab.txt','w')
@@ -179,65 +139,22 @@ def get_embedding_weights():
     f.close()
     return embedding
 
+def get_frame_embedding_weights():
+    embedding = np.zeros((len(frame_vocab) + 1, 20))
+    n = 0
+    for k, v in frame_vocab.iteritems():
+        try:
+            embedding[v] = np.random.uniform(low=-0.05, high=0.05, size=20)
+        except Exception, e:
+            #f.write(k+'\n')
+            n += 1
+            pass
+    print "%d embedding missed"%n
+    #f.close()
+    return embedding
 
-def get_liwc_features_from_text(filename):
-    y_map = {'joy': 0,'anger': 1,'surprise': 2,'disgust':3,'fear':4,'sad':5}
-    X = []
-    y = []
-    d = 0
-    m = {}
-    for line in open('extRatings.csv','r'):
-        if d==0:
-            d = d+1
-            continue
-        line = line.strip().split('\t')
-        x = line[0]
-        line.pop(0)
-        m[x] = [float(val) for val in line]
 
-    f = open('howmany.txt','w')
-
-    tknzr = TweetTokenizer()
-    for tweet in open(filename,'r'):
-        text = tweet.strip().split()
-        label = text[0]
-        text.pop(0)
-        text = ' '.join(text)
-        count_elem = 0
-        a = [0.0]*13
-        b = [0.0]*13
-        c = [0.0]*13
-        d = [0.0]*13
-        for word in tknzr.tokenize(text):
-            if word in m:
-                count_elem = count_elem+1
-                for o in range(len(m[word])):
-                    a[o] = a[o]+m[word][o]
-                    b[o] = max(b[o],m[word][o])
-                    if '#' in word:
-                        d[o] = d[o]+m[word][o]
-   
-        e = []
-        for val in a:
-            if count_elem!=0:
-                e.append(round(val/count_elem,2))
-            else:
-                e.append(round(val,2))
-        for val in b:
-            e.append(round(val,2))
-        for val in d:
-            e.append(round(val,2))
-        X.append(np.array(e))
-        y.append(y_map[label])
-        f.write(str(count_elem)+'\n')
-
-   
-    X = np.array(X)
-    X = (X - X.mean(axis=0)) / X.std(axis=0)
-
-    return X, np.array(y)
-
-def gen_Frame_Sequence(filename):
+def gen_tweet_frame_sequence(filename):
     y_map = {
             'joy': 0,
             'anger': 1,
@@ -247,97 +164,49 @@ def gen_Frame_Sequence(filename):
             'sad':5
             }
 
-    X, y = [], []
-    flag = True
-    if filename == 'frames.txt':
-        for line1 , line2 in zip(open('frames.txt','r'),open('tokenized_tweets_train.txt','r')):
-            line1 = ast.literal_eval(line1.strip())
-            line2 = line2.strip().split()
-            label = line2[-1]
-            seq, _emb = [], []
-            for word in line1:
-                seq.append(frame_vocab.get(word, frame_vocab['UNK']))
-            X.append(seq)
-            y.append(y_map[label])
-        return X, y
-    else:
-        for line1 , line2 in zip(open('frames_test.txt','r'),open('tokenized_tweets_test.txt','r')):
-            line1 = ast.literal_eval(line1.strip())
-            line2 = line2.strip().split()
-            label = line2[-1]
-            seq, _emb = [], []
-            for word in line1:
-                seq.append(frame_vocab.get(word, frame_vocab['UNK']))
-            X.append(seq)
-            y.append(y_map[label])
-        return X, y
-
-def gen_sequence(filename):
-    y_map = {
-            'joy': 0,
-            'anger': 1,
-            'surprise': 2,
-            'disgust':3,
-            'fear':4,
-            'sad':5
-            }
-
-    X, y = [], []
+    X, X_fr,y, = [], [],[]
     flag = True
     if filename == 'tokenized_tweets_train.txt':
-        for tweet in train_tweets:
-            text = glove_tokenize(tweet['text'].lower())
-            seq, _emb = [], []
+        for tweet, frame in train_tweets:
+            text,frame = word_frame_tokenize(tweet['text'].lower(),frame)
+            seq, fra = [], []
             for word in text:
                 seq.append(vocab.get(word, vocab['UNK']))
+            for word in frame:
+                fra.append(frame_vocab.get(word, frame_vocab['UNK']))
             X.append(seq)
+            X_fr.append(fra)
             y.append(y_map[tweet['label']])
-        return X, y
+        return X,X_fr, y
     else:
-        for tweet in test_tweets:
-            text = glove_tokenize(tweet['text'].lower())
-            seq, _emb = [], []
+        for tweet, frame in test_tweets:
+            text,frame = word_frame_tokenize(tweet['text'].lower(),frame)
+            seq, fra = [], []
             for word in text:
                 seq.append(vocab.get(word, vocab['UNK']))
+            for word in frame:
+                fra.append(frame_vocab.get(word, frame_vocab['UNK']))
             X.append(seq)
+            X_fr.append(fra)
             y.append(y_map[tweet['label']])
-        return X, y
+        return X,X_fr, y
 
-def select_tweets(filename):
-    # selects the tweets as in mean_glove_embedding method
-    # Processing
+
+def select_tweet_frame(filename):
     if filename == 'tokenized_tweets_train.txt':
         train_tweets = get_data('tokenized_tweets_train.txt')
     elif filename == 'tokenized_tweets_test.txt':
         test_tweets = get_data('tokenized_tweets_test.txt')
     tweet_return = []
     if filename == 'tokenized_tweets_train.txt':
-        c = 1
-        for tweet in train_tweets:
-            _emb = 0
-            words = glove_tokenize(tweet['text'].lower())
-            for w in words:
-                if w in word2vec_model:  # Check if embeeding there in GLove model
-                    _emb+=1
-            c = c+1
-            # if _emb:   # Not a blank tweet
-            tweet_return.append(tweet)
+        for tweet, frame in zip(train_tweets,open('frames.txt','r')):
+            tweet_return.append((tweet,frame.strip()))
         print('Tweets selected:', len(tweet_return))
-        #pdb.set_trace()
         return tweet_return
     else:
-        c = 1
-        for tweet in test_tweets:
-            _emb = 0
-            words = glove_tokenize(tweet['text'].lower())
-            for w in words:
-                if w in word2vec_model:  # Check if embeeding there in GLove model
-                    _emb+=1
-            c = c+1
-            # if _emb:   # Not a blank tweet
-            tweet_return.append(tweet)
+        for tweet, frame in zip(test_tweets,open('frames_test.txt','r')):
+            tweet_return.append((tweet,frame.strip()))
         print('Tweets selected:', len(tweet_return))
-        #pdb.set_trace()
         return tweet_return
 
 
@@ -345,10 +214,10 @@ def select_tweets(filename):
 def gen_vocab():
     # Processing
     vocab_index = 1
-    for tweet in train_tweets:
-        text = glove_tokenize(tweet['text'].lower())
-        text = ' '.join([c for c in text if c not in punctuation])
-        words = text.split()
+    for tweet,frame in train_tweets:
+        text,frame = word_frame_tokenize(tweet['text'].lower(),frame)
+        #text = ' '.join([c for c in text if c not in punctuation])
+        words = text
         # words = [word for word in words if word not in STOPWORDS]
 
         for word in words:
@@ -358,10 +227,10 @@ def gen_vocab():
                 vocab_index += 1
             freq[word] += 1
 
-    for tweet in test_tweets:
-        text = glove_tokenize(tweet['text'].lower())
-        text = ' '.join([c for c in text if c not in punctuation])
-        words = text.split()
+    for tweet,frame in test_tweets:
+        text,frame = word_frame_tokenize(tweet['text'].lower(),frame)
+        #text = ' '.join([c for c in text if c not in punctuation])
+        words = text
         # words = [word for word in words if word not in STOPWORDS]
 
         for word in words:
@@ -374,10 +243,12 @@ def gen_vocab():
     vocab['UNK'] = len(vocab) + 1
     reverse_vocab[len(vocab)] = 'UNK'
 
+
+
 def gen_frame_vocab():
     vocab_index = 1
     for frames in open('frames.txt','r'):
-        frames = ast.literal_eval(frames.strip())
+        frames = frames.strip().split()
         for frame in frames:
             if frame not in frame_vocab:
                 frame_vocab[frame] = vocab_index
@@ -386,7 +257,7 @@ def gen_frame_vocab():
             # freq[word] += 1
 
     for frames in open('frames_test.txt','r'):
-        frames = ast.literal_eval(frames.strip())
+        frames = frames.strip().split()
         for frame in frames:
             if frame not in frame_vocab:
                 frame_vocab[frame] = vocab_index
@@ -404,135 +275,102 @@ def shuffle_weights(model):
     weights = [np.random.permutation(w.flat).reshape(w.shape) for w in weights]
     model.set_weights(weights)
 
-def lstm_model(sequence_length_word, embedding_matrix, embedding_dim,sequence_length_frame):
-	model_variation = 'LSTM'
-	print('Model variation is %s' % model_variation)
-	model1 = Sequential()
-	model1.add(Embedding(len(vocab)+1, embedding_dim,weights= [embedding_matrix], input_length=sequence_length_word, trainable=False))
-	model1.add(Dropout(0.3))#, input_shape=(sequence_length, embedding_dim)))
-	model1.add(Bidirectional(LSTM(150,return_sequences=True)))
-	model1.add(Dropout(0.3))
-	model1.add(Bidirectional(LSTM(150,return_sequences=True)))
-	model1.add(Dropout(0.3))
-	#model1.add(Bidirectional(LSTM(150,return_sequences=True)))
-	#model1.add(Dropout(0.3))
-	#model1.add(Flatten())
-	#model1.add(AttLayer())
-	model1.add(Flatten())
+def lstm_model(sequence_length, word_embedding_matrix, frame_embedding_matrix,embedding_dim):
+    model_variation = 'LSTM'
+    print('Model variation is %s' % model_variation)
+    model1 = Sequential()
+    model1.add(Embedding(len(vocab)+1, embedding_dim,weights= [word_embedding_matrix], input_length=sequence_length, trainable=False))
+    #model1.add(Flatten())
 
-	model2 = Sequential()
-	model2.add(Embedding(len(frame_vocab)+1, 20, input_length=sequence_length_frame, trainable=True))
-	model2.add(Dropout(0.3))#, input_shape=(sequence_length, embedding_dim)))
-	model2.add(Bidirectional(LSTM(50,return_sequences=True)))
-	model2.add(Dropout(0.3))
-	#model2.add(Bidirectional(LSTM(150,return_sequences=True)))
-	#model2.add(Dropout(0.3))
-	model2.add(Flatten())
+    model2 = Sequential()
+    model2.add(Embedding(len(frame_vocab)+1, 20,weights= [frame_embedding_matrix], input_length=sequence_length, trainable=True))
+    #model2.add(Flatten())
+
+    model3 = Sequential()
+    model3.add(Merge([model1, model2], mode='concat'))
+    model3.add(Dropout(0.3))
+    model3.add(Bidirectional(LSTM(150,return_sequences=True)))
+    model3.add(Dropout(0.3))
+    model3.add(Bidirectional(LSTM(150,return_sequences=True)))
+    model3.add(Dropout(0.3))
+    #model1.add(Bidirectional(LSTM(150,return_sequences=True)))
+    #model1.add(Dropout(0.3))
+    #model1.add(Flatten())
+    model3.add(AttLayer())
+
+    #model3.add(Flatten())
+    model3.add(MaxoutDense(100, W_constraint=maxnorm(2)))
+    model3.add(Dropout(0.5))
+    model3.add(Dense(6,activity_regularizer=l2(0.0001)))
+    model3.add(Activation('softmax'))
+    model3.compile(loss='categorical_crossentropy',  optimizer=adam, metrics=['accuracy'])
+    print(model3.summary())
     
-	model = Sequential()
-	model.add(Merge([model1,model2], mode='concat'))
-	model.add(MaxoutDense(100, W_constraint=maxnorm(2)))
-	model.add(Dropout(0.5))
-	model.add(Dense(6,activity_regularizer=l2(0.0001)))
-	model.add(Activation('softmax'))
-	model.compile(loss='categorical_crossentropy',  optimizer=adam, metrics=['accuracy'])
-	print(model.summary())
-	
-	return model
+    return model3
 
 
-
-
-def train_LSTM(X_train, y_train, X_test,y_test,X_frame_train, y_frame_train,X_frame_test, y_frame_test, model,inp_dim, weights,  batch_size=500):
-    
-    
+def train_LSTM_with_frame(X_train, y_train, X_test,y_test,X_frame_train, X_frame_test,model):
     best_macro = 0.0
-    p, r, f1 = 0., 0., 0.
-    p1, r1, f11 = 0., 0., 0.
-    sentence_len_word = X_train.shape[1]
-    sentence_len_frame = X_frame_train.shape[1]
-    
-    y_train1 = y_train.reshape((len(y_train), 1))
-    X_temp1 = np.hstack((X_train, y_train1))
-    y_train2 = y_frame_train.reshape((len(y_frame_train), 1))
-    X_temp2 = np.hstack((X_frame_train, y_train2))
-
-
-    for epoch in range(50):
-        print('Epoch ',epoch,'\n')
-        for X_batch1, X_batch2 in batch_gen(X_temp1, X_temp2,500):
-            curr_X1 = X_batch1[:, :sentence_len_word]
-            curr_Y1 = X_batch1[:, sentence_len_word]
-            curr_X2 = X_batch2[:, :sentence_len_frame]
-            curr_Y2 = X_batch2[:, sentence_len_frame]
-            class_weights = None
-
-            try:
-                curr_Y1 = to_categorical(curr_Y1, nb_classes=6)
-                curr_Y2 = to_categorical(curr_Y2, nb_classes=6)
-            except Exception, e:
-                print(e)
-                                                    
-            loss, acc = model.train_on_batch([curr_X1,curr_X2], curr_Y1, class_weight=None)
-        y_pred = model.predict([X_test,X_frame_test],batch_size=500)
-        y_pred = np.argmax(y_pred, axis=1)
-        print classification_report(y_test, y_pred)
-	print(len(y_pred))
-        if f1_score(y_test, y_pred, average='macro')>=best_macro:
-		f = open('frame_adam_new_predictions.txt','w')
-		m = {0:'joy',1:'anger',2:'surprise',3:'disgust',4:'fear',5:'sad'}
-		c = 0
-		for p in range(len(y_pred)):
-			f.write(m[y_pred[p]]+'\t'+str(c+1)+'\n')
-			c = c+1
-		f.close()
-		print(c==len(y_pred))
-		best_macro = f1_score(y_test,y_pred,average='macro')
-		print('Best macro so far = ',best_macro)
-	if epoch%10==0 and epoch>0:
-		K.set_value(adam.lr, 0.1 * K.get_value(adam.lr))
-	print(epoch, K.get_value(adam.lr))
+    y_train = to_categorical(y_train,nb_classes=6)
+    checkpointer = ModelCheckpoint(filepath='./weights1.hdf5', verbose=1, save_best_only=True)
+    model.fit(x=[X_train,X_frame_train],y=y_train,batch_size=500, nb_epoch=30, validation_data=([X_test, X_frame_test], to_categorical(y_test,nb_classes=6)),callbacks=[checkpointer])
+    model.load_weights(weightsPath)
+    y_pred = model.predict([X_test,X_frame_test],batch_size=500)
+    y_pred = np.argmax(y_pred, axis=1)
+    print classification_report(y_test, y_pred)
+    if f1_score(y_test, y_pred, average='macro')>=best_macro:
+        f = open('diff_predictions1.txt','w')
+        m = {0:'joy',1:'anger',2:'surprise',3:'disgust',4:'fear',5:'sad'}
+        c = 0
+        for p in range(len(y_pred)):
+            f.write(m[y_pred[p]]+'\t'+str(c+1)+'\n')
+            c = c+1
+        f.close()
+        best_macro = f1_score(y_test,y_pred,average='macro')
+        print('Best macro so far = ',best_macro)
+    if epoch%10==0 and epoch>0:
+        K.set_value(adam.lr, 0.5 * K.get_value(adam.lr))
+    print(epoch, K.get_value(adam.lr))
 
 
 np.random.seed(42)
 word2vec_model = gensim.models.KeyedVectors.load_word2vec_format('ntua_twitter_affect_310.txt')
-train_tweets = select_tweets('tokenized_tweets_train.txt')
-test_tweets =  select_tweets('tokenized_tweets_test.txt')
+train_tweets = select_tweet_frame('tokenized_tweets_train.txt')
+test_tweets =  select_tweet_frame('tokenized_tweets_test.txt')
 gen_vocab()
 gen_frame_vocab()
-X_train, y_train = gen_sequence('tokenized_tweets_train.txt')
-X_test,y_test = gen_sequence('tokenized_tweets_test.txt')
-# X_liwc_train, y_liwc_train = get_liwc_features_from_text('train-v3.csv')
-# X_liwc_test, y_liwc_test = get_liwc_features_from_text('trial-v3.csv')
-X_frame_train , y_frame_train = gen_Frame_Sequence('frames.txt')
-X_frame_test , y_frame_test =  gen_Frame_Sequence('frames_test.txt')
+
+X_train,X_train_frame, y_train = gen_tweet_frame_sequence('tokenized_tweets_train.txt')
+X_test,X_test_frame,y_test = gen_tweet_frame_sequence('tokenized_tweets_test.txt')
+
 
 MAX_SEQUENCE_LENGTH1 = max(map(lambda x:len(x), X_train))
 MAX_SEQUENCE_LENGTH2 = max(map(lambda x:len(x), X_test))
 MAX_SEQUENCE_LENGTH = max(MAX_SEQUENCE_LENGTH1,MAX_SEQUENCE_LENGTH2)
-print "max seq length is for words %d"%(MAX_SEQUENCE_LENGTH)
+print "max seq length is %d"%(MAX_SEQUENCE_LENGTH)
+
 train_data = pad_sequences(X_train, maxlen=MAX_SEQUENCE_LENGTH)
 test_data = pad_sequences(X_test, maxlen=MAX_SEQUENCE_LENGTH)
 
+train_frame_data = pad_sequences(X_train_frame, maxlen=MAX_SEQUENCE_LENGTH)
+test_frame_data = pad_sequences(X_test_frame, maxlen=MAX_SEQUENCE_LENGTH)
 
-MAX_SEQUENCE_LENGTH1 = max(map(lambda x:len(x), X_frame_train))
-MAX_SEQUENCE_LENGTH2 = max(map(lambda x:len(x), X_frame_test))
-MAX_SEQUENCE_LENGTH = max(MAX_SEQUENCE_LENGTH1,MAX_SEQUENCE_LENGTH2)
-print "max seq length for frame is %d"%(MAX_SEQUENCE_LENGTH)
-train_frame_data = pad_sequences(X_frame_train, maxlen=MAX_SEQUENCE_LENGTH)
-test_frame_data = pad_sequences(X_frame_test, maxlen=MAX_SEQUENCE_LENGTH)
 
-print(train_data.shape)
-print(test_data.shape)
-print(train_frame_data.shape)
-print(test_frame_data.shape)
+print train_data.shape
+print test_data.shape
+
+
 
 y_train = np.array(y_train)
 y_test = np.array(y_test)
 
-y_frame_train = np.array(y_frame_train)
-y_frame_test = np.array(y_frame_test)
+
 W = get_embedding_weights()
+W_fr = get_frame_embedding_weights()
+
+
 adam = Adam(clipnorm=1,lr =.001)
-model = lstm_model(train_data.shape[1], W,EMBEDDING_DIM,train_frame_data.shape[1])
-train_LSTM(train_data, y_train, test_data,y_test,train_frame_data, y_frame_train,test_frame_data, y_frame_test,model, EMBEDDING_DIM, W)
+print(train_data[0])
+print(train_frame_data[0])
+model = lstm_model(train_data.shape[1], W,W_fr,EMBEDDING_DIM)
+train_LSTM_with_frame(train_data, y_train, test_data,y_test,train_frame_data,test_frame_data,model)
