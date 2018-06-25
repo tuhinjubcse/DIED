@@ -41,8 +41,7 @@ import pickle
 from sklearn.model_selection import train_test_split
 #from autocorrect import spell
 from keras.optimizers import Adam
-from keras.callbacks import ModelCheckpoint
-
+from keras.callbacks import ModelCheckpoint,ReduceLROnPlateau
 
 reload(sys)
 sys.setdefaultencoding('utf8')
@@ -140,11 +139,11 @@ def get_embedding_weights():
     return embedding
 
 def get_frame_embedding_weights():
-    embedding = np.zeros((len(frame_vocab) + 1, 20))
+    embedding = np.zeros((len(frame_vocab) + 1, 50))
     n = 0
     for k, v in frame_vocab.iteritems():
         try:
-            embedding[v] = np.random.uniform(low=-0.05, high=0.05, size=20)
+            embedding[v] = np.random.uniform(low=-0.05, high=0.05, size=50)
         except Exception, e:
             #f.write(k+'\n')
             n += 1
@@ -283,7 +282,7 @@ def lstm_model(sequence_length, word_embedding_matrix, frame_embedding_matrix,em
     #model1.add(Flatten())
 
     model2 = Sequential()
-    model2.add(Embedding(len(frame_vocab)+1, 20,weights= [frame_embedding_matrix], input_length=sequence_length, trainable=True))
+    model2.add(Embedding(len(frame_vocab)+1, 50,weights= [frame_embedding_matrix], input_length=sequence_length, trainable=True))
     #model2.add(Flatten())
 
     model3 = Sequential()
@@ -296,9 +295,9 @@ def lstm_model(sequence_length, word_embedding_matrix, frame_embedding_matrix,em
     #model1.add(Bidirectional(LSTM(150,return_sequences=True)))
     #model1.add(Dropout(0.3))
     #model1.add(Flatten())
-    model3.add(AttLayer())
+    #model3.add(AttLayer())
 
-    #model3.add(Flatten())
+    model3.add(Flatten())
     model3.add(MaxoutDense(100, W_constraint=maxnorm(2)))
     model3.add(Dropout(0.5))
     model3.add(Dense(6,activity_regularizer=l2(0.0001)))
@@ -310,27 +309,26 @@ def lstm_model(sequence_length, word_embedding_matrix, frame_embedding_matrix,em
 
 
 def train_LSTM_with_frame(X_train, y_train, X_test,y_test,X_frame_train, X_frame_test,model):
-    best_macro = 0.0
-    y_train = to_categorical(y_train,nb_classes=6)
-    checkpointer = ModelCheckpoint(filepath='./weights1.hdf5', verbose=1, save_best_only=True)
-    model.fit(x=[X_train,X_frame_train],y=y_train,batch_size=500, nb_epoch=30, validation_data=([X_test, X_frame_test], to_categorical(y_test,nb_classes=6)),callbacks=[checkpointer])
-    model.load_weights(weightsPath)
-    y_pred = model.predict([X_test,X_frame_test],batch_size=500)
-    y_pred = np.argmax(y_pred, axis=1)
-    print classification_report(y_test, y_pred)
-    if f1_score(y_test, y_pred, average='macro')>=best_macro:
-        f = open('diff_predictions1.txt','w')
-        m = {0:'joy',1:'anger',2:'surprise',3:'disgust',4:'fear',5:'sad'}
-        c = 0
-        for p in range(len(y_pred)):
-            f.write(m[y_pred[p]]+'\t'+str(c+1)+'\n')
-            c = c+1
-        f.close()
-        best_macro = f1_score(y_test,y_pred,average='macro')
-        print('Best macro so far = ',best_macro)
-    if epoch%10==0 and epoch>0:
-        K.set_value(adam.lr, 0.5 * K.get_value(adam.lr))
-    print(epoch, K.get_value(adam.lr))
+	best_macro = 0.0
+	y_train = to_categorical(y_train,nb_classes=6)
+	reduce_lr = ReduceLROnPlateau(monitor='val_acc', factor=0.2,verbose=1,patience=3, min_lr=0.001)
+	checkpointer = ModelCheckpoint(filepath='./weights.hdf5', verbose=1, monitor='val_acc',save_best_only=True)
+	model.fit(x=[X_train,X_frame_train],y=y_train,batch_size=500, nb_epoch=50, validation_data=([X_test, X_frame_test], to_categorical(y_test,nb_classes=6)),callbacks=[checkpointer,reduce_lr])
+	model.load_weights('./weights.hdf5')
+	y_pred = model.predict([X_test,X_frame_test],batch_size=500)
+	y_pred = np.argmax(y_pred, axis=1)
+	print classification_report(y_test, y_pred)
+	if f1_score(y_test, y_pred, average='macro')>=best_macro:
+		f = open('diff_predictions1.txt','w')
+        	m = {0:'joy',1:'anger',2:'surprise',3:'disgust',4:'fear',5:'sad'}
+		c = 0
+        	for p in range(len(y_pred)):
+            		f.write(m[y_pred[p]]+'\t'+str(c+1)+'\n')
+            		c = c+1
+        	f.close()
+        	best_macro = f1_score(y_test,y_pred,average='macro')
+        	print('Best macro so far = ',best_macro)
+	
 
 
 np.random.seed(42)
